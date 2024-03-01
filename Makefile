@@ -20,6 +20,7 @@ $(BUILD_DIR)/main.img: bootloader kernel
 #
 bootloader: $(BUILD_DIR)/bootloader.bin
 $(BUILD_DIR)/bootloader.bin:
+	@mkdir -p $(@D)
 	$(ASM) $(SRC_DIR)/bootloader/boot.asm -f bin -o $(BUILD_DIR)/bootloader.bin
 
 #
