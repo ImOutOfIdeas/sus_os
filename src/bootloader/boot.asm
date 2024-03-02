@@ -44,14 +44,11 @@ main:
     mov sp, 0x7c00 ; Move stack pointer to here and grow down
 
     mov [ebr_drive_number], dl  ; Drive number stored in dl on boot
-    
-    ; Read Disk
-    mov ah, 2       ; Disk read
-    mov al, 1       ; Sectors to read
-    
-    mov cl, 1       ; Sector number
-    mov bx, 0x7e00
-    
+
+    mov ax, 1           ; Read LBA index 1
+    ;mov cl, 1
+    mov bx, 0x7e00      ; Pointer to buffer
+    call disk_read      ; Read at LBA index 1 and save to 0x7e00
 
     mov si, boot_msg
     call print
@@ -59,13 +56,92 @@ main:
 
 jmp $ ; Suspend program execution past here
 
+;
+; Functions
+;
+
+; Input: LBA index in ax
+; Output: cx [bits 5-0]   sector number
+;         cx [bits 15-6]  cylinder
+;         dh              head
+lba_to_chs:
+    push ax
+    push dx
+
+    ; Sector = (LBA % SPT) + 1
+    xor dx, dx                          ; Zeroize dx before division
+    div word [bpb_sectors_per_track]    ; (LBA / SPT)->ax & (Sector - 1)->dx
+    inc dx
+    mov cx, dx  ; [cx has sector number]
+   
+    ; Head = (LBA / SPT) % heads
+    ; Cylinder = (LBA / SPT) / heads
+    xor dx, dx 
+    div word [bpb_heads]    ; (Cylinder)->ax & (Head)->dx
+
+    mov dh, dl  ; [dh has head number]
+    mov ch, al  ; cx [bits 15-8] set with cylinder
+    shl ah, 6   ; Shift left 6
+    or cl, ah   ; Copy the 2 highest bits from ah into cl 
+
+    pop ax      ; pop dx into ax
+    mov dl, al  ; Restore dl register
+    pop ax      ; Restore ax register
+
+    ret
+
+
+; Read the disk at LBA index in ax
 disk_read:
     push ax
     push bx
     push cx
+    push dx
+    push di
 
     call lba_to_chs
+    
+    mov ah, 0x02        ; Disk read
+    mov di, 3           ; retry at least 3 times
 
+disk_read_retry:
+    stc                     ; Ensure carry is set
+    int 13h                 ; Attempt disk read
+    jnc disk_read_success   ; Carry unset = success
+
+    call disk_reset         ; Attempt to reset disk service
+    dec di                  ; Success if disk_reset returns
+    test di, di             
+    jnz disk_read_retry     ; Retry until counter is zero, then fail
+
+disk_read_fail:
+    mov si, read_failure
+    call print
+    hlt
+    jmp $   ; Suspend execution if disk read completely fails
+
+disk_read_success:
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+
+    ret
+
+
+; Reset the disk system
+disk_reset:
+    pusha
+    stc
+    mov ah, 0
+    int 0x13 
+    jc disk_read_fail   ; If reset fails (IT'S OVER)
+    popa
+    ret
+
+
+; Print string pointed to by si
 print:
     push ax
     push bx
@@ -82,7 +158,6 @@ print_loop:
     int 0x10        ; Print to screen
     jmp print_loop
     
-
 print_done:
     pop si
     pop bx
@@ -91,7 +166,12 @@ print_done:
     ret
 
 
-boot_msg: db "BOOT!", 0x0d, 0x0a, 0 ; "Boot!\n"
+;
+; Strings
+;
+boot_msg: db "BOOT!", 0x0d, 0x0a, 0
+read_failure: db "Failed to read disk!", 0x0d, 0x0a, 0
+
 
 ; Make bootloader 512 bytes with end signature
 times 510 - ($ - $$) db 0
